@@ -1,0 +1,179 @@
+#include <LiquidCrystal_I2C.h>
+#include <elapsedMillis.h>
+#include <ESP8266WiFi.h>
+#include <ThingSpeak.h>
+
+// IRSENSOR
+#define iRSensor1  D3
+#define iRSensor2  D4
+
+// Relay
+#define pinRelay1 D5
+#define TRIGGER_PIN1  D6 // Pin tied to trigger pin on the ultrasonic sensor.
+#define ECHO_PIN1     D7 // Pin tied to echo pin on the ultrasonic sensor.
+
+// LCD
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Adjust the I2C address based on your module
+
+// ThingSpeak
+const char* ssid = "p balap";
+const char* password = "shella12";
+unsigned long myChannelNumber = 2551314;
+const char* myWriteAPIKey = "HHVZZ7BBUPISUYNL";
+
+// WiFi client
+WiFiClient client;
+
+// MILLIS
+elapsedMillis GelasMillis;
+elapsedMillis ultrasonikGelasMillis;
+
+unsigned long GelasInterval  = 1000;
+unsigned long ultrasonikGelasInterval = 500;
+
+float duration_us1, distance_cm1; // Ultrasonik gelas
+
+// Variabel lainnya
+bool pompaState = false;
+bool scanningGelas = true;
+int batesGelas; // cm
+String ukuranGelas;
+int ir1state;
+int ir2state;
+
+void setup() {
+  Serial.begin(115200);  // Initialize serial
+
+  // SETUP LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.print("Memulai");
+
+  // Inisiasi pin ir sensor
+  pinMode(iRSensor1, INPUT);
+  pinMode(iRSensor2, INPUT);
+  delay(10);
+  // Inisiasi pin Ultrasonik gelas
+  pinMode(TRIGGER_PIN1, OUTPUT);
+  pinMode(ECHO_PIN1, INPUT);
+
+  // Inisiasi pin relay pompa
+  pinMode(pinRelay1, OUTPUT);
+
+  for (int i = 0; i < 4; i++) {
+    lcd.print(".");
+    delay(1000);
+  }
+  Serial.println("Inisiasi Sensor = DONE");
+  lcd.setCursor(0, 1);
+  lcd.print("Sensor Done");
+  delay(1500);
+  lcd.clear();
+  digitalWrite(pinRelay1, HIGH); // Pompa Mati
+  lcd.setCursor(0, 0);
+  lcd.print("Air : ");
+
+  // Inisiasi WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected");
+  ThingSpeak.begin(client);
+}
+
+void loop() {
+  // Membaca sensor IR
+  ir1state = digitalRead(iRSensor1);
+  ir2state = digitalRead(iRSensor2);
+  Serial.print("IR1: ");
+  Serial.print(ir1state);
+  Serial.print("\t");
+  Serial.print("IR2: ");
+  Serial.println(ir2state);
+
+  if (ir1state == LOW) {
+    pengukuranAirGelas();
+    Gelas();
+  } else {
+    scanningGelas = true;
+    digitalWrite(pinRelay1, HIGH); // Pompa Mati
+  }
+}
+
+void pengukuranAirGelas() {
+  if (ultrasonikGelasMillis >= ultrasonikGelasInterval) {
+    digitalWrite(TRIGGER_PIN1, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGGER_PIN1, LOW);
+
+    // Measure duration of pulse from ECHO pin
+    duration_us1 = pulseIn(ECHO_PIN1, HIGH);
+
+    // Calculate the distance
+    distance_cm1 = (duration_us1 / 2) / 29.1;
+
+    // Print the value to Serial Monitor
+    Serial.print("distance: ");
+    Serial.print(distance_cm1);
+    Serial.println(" cm");
+
+    ultrasonikGelasMillis = 0;
+  }
+}
+
+void Gelas() {
+  if (GelasMillis >= GelasInterval) {
+    // Memastikan gelas
+    if (scanningGelas) {
+      lcd.setCursor(0, 1);
+      lcd.print("Tahan");
+      Serial.print("Menunggu Gelas");
+      for (int i = 0; i < 4; i++) {
+        lcd.print(".");
+        delay(1000);
+      }
+      // Penentuan ukuran gelas
+      if (ir1state == LOW) {
+        scanningGelas = false;
+
+        // Penentuan ukuran gelas
+        if (ir2state == LOW) {
+          ukuranGelas = "TINGGI";
+          batesGelas = 10;
+          Serial.println("Gelas TINGGI terdeteksi");
+        } else {
+          ukuranGelas = "RENDAH";
+          batesGelas = 15;
+          Serial.println("Gelas RENDAH terdeteksi");
+        }
+        lcd.print("DONE");
+      } else {
+        lcd.print("GGL");
+        scanningGelas = true;
+        Serial.println("Gagal mendeteksi gelas");
+        delay(1000);
+      }
+      lcd.setCursor(0, 1);
+      lcd.print("               ");
+      delay(200);
+    }
+
+    // Pengisian air
+    if (distance_cm1 <= batesGelas) {
+      digitalWrite(pinRelay1, HIGH); // Pompa Mati
+      lcd.setCursor(0, 1);
+      lcd.print("Selesai :)");
+      Serial.println("Pengisian gelas selesai");
+      ThingSpeak.setField(1, distance_cm1);
+      ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+    } else {
+      digitalWrite(pinRelay1, LOW); // Pompa Nyala
+      lcd.setCursor(0, 1);
+      lcd.print("Mengisi...");
+      Serial.println("Mengisi gelas");
+    }
+    GelasMillis = 0;
+  }
+}
